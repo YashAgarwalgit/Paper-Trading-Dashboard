@@ -1955,7 +1955,11 @@ elif page == "Live Paper Trading":
                 
                 if analytics:
                     col1, col2, col3 = st.columns(3)
-                    col1.metric("Jensen's Alpha", f"{analytics.get('Jensen\'s Alpha', 0):.3f}", help="Measures the portfolio's return above the expected return given its beta (risk). Positive alpha indicates outperformance.")
+                    col1.metric(
+                        "Jensen's Alpha",
+                        f"{analytics.get('Jensens Alpha', 0):.3f}",
+                        help="Measures the portfolio's return above the expected return given its beta (risk). Positive alpha indicates outperformance."
+                    )
                     col2.metric("Portfolio Beta", f"{analytics.get('Portfolio Beta', 0):.2f}", help="Measures the portfolio's volatility relative to the market (NIFTY 50). Beta > 1 is more volatile; < 1 is less volatile.")
                     col3.metric("Sharpe Ratio", f"{analytics.get('Sharpe Ratio', 0):.2f}", help="Measures risk-adjusted return. Higher is better.")
                     
