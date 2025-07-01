@@ -853,7 +853,9 @@ def create_portfolio_composition_chart(portfolio_data):
 
 def execute_batch_portfolio_build(portfolio_name: str, total_capital: float, signal_file, slippage_pct: float, commission_bps: int):
     """
-    Builds a new portfolio from an uploaded signal file in a single, efficient batch operation.
+    Builds a new portfolio from a signal file. This version is leverage-aware,
+    allowing the sum of weights to exceed 1.0 and correctly reflecting the
+    borrowed funds as a negative cash balance.
     """
     # --- 1. Validation and Setup ---
     if not signal_file:
@@ -869,19 +871,24 @@ def execute_batch_portfolio_build(portfolio_name: str, total_capital: float, sig
         st.error(f"Failed to read signal file: {e}")
         return
 
-    # Create the new portfolio
+    # --- NEW: Calculate Total Weight and Leverage ---
+    total_weight = signal_df['Weight'].sum()
+    leverage = total_weight # For weights > 1, this is the leverage factor
+
+    # Create the new portfolio with the specified equity base
     initialize_portfolio_state(portfolio_name, total_capital)
-    load_portfolio_state(portfolio_name) # Load it into the session
-    
+    load_portfolio_state(portfolio_name)
     portfolio = st.session_state.portfolio
     
-    with st.spinner(f"Building portfolio '{portfolio_name}'... This may take a moment."):
+    with st.spinner(f"Building '{portfolio_name}' with {leverage:.2f}x leverage... This may take a moment."):
         # --- 2. Batch Price Fetching ---
         all_tickers = signal_df['Ticker'].tolist()
         success, live_prices = get_live_prices(all_tickers)
 
         if not success:
-            st.error(f"Failed to fetch live prices for tickers. Reason: {live_prices}")
+            st.error(f"Failed to fetch live prices. Reason: {live_prices}")
+            # Clean up the partially created portfolio
+            delete_portfolio(portfolio_name)
             return
         
         # --- 3. Efficient Batch Calculation ---
@@ -898,11 +905,9 @@ def execute_batch_portfolio_build(portfolio_name: str, total_capital: float, sig
                 continue
 
             market_price = live_prices[ticker]
-            
-            # Apply slippage for BUY orders
             execution_price = market_price * (1 + (slippage_pct / 100))
             
-            # Calculate quantity based on weight and execution price
+            # Capital for this ticker is based on the equity base, not the total market value
             capital_for_ticker = total_capital * weight
             quantity = capital_for_ticker / execution_price
             
@@ -912,40 +917,41 @@ def execute_batch_portfolio_build(portfolio_name: str, total_capital: float, sig
             trade_value = quantity * execution_price
             commission = trade_value * (commission_bps / 10000)
             
-            # --- 4. Prepare Portfolio Updates (without saving yet) ---
-            # Add to positions
+            # --- 4. Prepare Portfolio Updates ---
             portfolio['positions'][ticker] = {
                 "quantity": float(quantity),
                 "avg_price": float(execution_price),
-                "last_price": float(market_price) # Store both for reference
+                "last_price": float(market_price)
             }
             
-            # Create transaction record
             transactions.append({
-                "timestamp": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'), 
-                "ticker": ticker, 
-                "action": "BUY", 
-                "quantity": float(quantity), 
-                "price": round(float(execution_price), 2), 
+                "timestamp": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                "ticker": ticker, "action": "BUY",
+                "quantity": float(quantity),
+                "price": round(float(execution_price), 2),
                 "commission": round(float(commission), 2)
             })
             
             total_cash_outflow += trade_value
             total_commission += commission
 
-        # --- 5. Final, Single State Update ---
+        # --- 5. Final State Update (Leverage is handled here) ---
         portfolio['transactions'].extend(transactions)
+        
+        # The cash balance is now allowed to be negative, representing borrowed funds.
         portfolio['balances']['cash'] -= (total_cash_outflow + total_commission)
         
         # Mark to market immediately after creation
         total_market_value = sum(p['quantity'] * p['last_price'] for p in portfolio['positions'].values())
         portfolio['balances']['market_value'] = total_market_value
+        
+        # Total Value (Equity) = Market Value of Assets + Cash (which can be negative)
         portfolio['balances']['total_value'] = portfolio['balances']['cash'] + total_market_value
         
-        # Save the fully constructed portfolio state ONCE
         save_portfolio_state()
 
-    st.success(f"Successfully built new portfolio '{portfolio_name}' with {len(transactions)} tickers!")
+    st.success(f"Successfully built portfolio '{portfolio_name}' with {len(transactions)} tickers!")
+    st.info(f"Total weight of {total_weight:.2%} applied, utilizing **{leverage:.2f}x leverage**. The negative cash balance reflects funds used on margin.")
     st.balloons()
 
 @st.cache_data(ttl=3600) # Cache for an hour
@@ -1718,20 +1724,27 @@ elif page == "Live Paper Trading":
         with st.expander("🤖 Automated Portfolio Builder"):
             st.info("Upload a CSV with 'Ticker' and 'Weight' columns to build a portfolio instantly.")
             
-            builder_portfolio_name = st.text_input("New Portfolio Name", placeholder="e.g., 'june_momentum_fund'")
-            builder_capital = st.number_input("Total Capital to Allocate (INR)", value=10000000.0, step=100000.0, format="%.2f", key="builder_capital")
-            builder_signal_file = st.file_uploader("Upload Signal File (.csv)", type=['csv'])
+            # --- Callback function to safely update the selection ---
+            def on_build_portfolio():
+                st.session_state.selected_portfolio = st.session_state.builder_portfolio_name_input
 
-            if st.button("Build Portfolio From Signal", use_container_width=True, type="primary"):
+            builder_portfolio_name = st.text_input(
+                "New Portfolio Name",
+                placeholder="e.g., 'july_leveraged_fund'",
+                key="builder_portfolio_name_input" # Use a different key for the input widget
+            )
+            builder_capital = st.number_input("Total Capital to Allocate (INR)", value=10000000.0, step=100000.0, format="%.2f", key="builder_capital")
+            builder_signal_file = st.file_uploader("Upload Signal File (.csv)", type=['csv'], key="builder_signal_file")
+
+            # The button now calls our callback function when clicked
+            if st.button("Build Portfolio From Signal", use_container_width=True, type="primary", on_click=on_build_portfolio):
                 if builder_portfolio_name and builder_portfolio_name not in available_portfolios:
-                    # We need slippage and commission settings for the build
-                    # Let's use the ones from the 'Trade Settings' expander
-                    slippage = st.session_state.get('slippage_pct_val', 1.0) # Using session state for settings
+                    # Get slippage and commission settings from session state
+                    slippage = st.session_state.get('slippage_pct_val', 1.0)
                     commission = st.session_state.get('commission_bps_val', 5)
                     
                     execute_batch_portfolio_build(builder_portfolio_name, builder_capital, builder_signal_file, slippage, commission)
-                    st.session_state.selected_portfolio = builder_portfolio_name
-                    st.rerun()
+                    st.rerun() # Rerun the app to reflect the new portfolio selection
                 else:
                     st.error("Please provide a unique new portfolio name.")
         # --- End of New Section ---
@@ -1942,11 +1955,7 @@ elif page == "Live Paper Trading":
                 
                 if analytics:
                     col1, col2, col3 = st.columns(3)
-                    col1.metric(
-                        "Jensen's Alpha",
-                        f"{analytics.get('Jensens Alpha', 0):.3f}",
-                        help="Measures the portfolio's return above the expected return given its beta (risk). Positive alpha indicates outperformance."
-                    )
+                    col1.metric("Jensen's Alpha", f"{analytics.get('Jensen\'s Alpha', 0):.3f}", help="Measures the portfolio's return above the expected return given its beta (risk). Positive alpha indicates outperformance.")
                     col2.metric("Portfolio Beta", f"{analytics.get('Portfolio Beta', 0):.2f}", help="Measures the portfolio's volatility relative to the market (NIFTY 50). Beta > 1 is more volatile; < 1 is less volatile.")
                     col3.metric("Sharpe Ratio", f"{analytics.get('Sharpe Ratio', 0):.2f}", help="Measures risk-adjusted return. Higher is better.")
                     
