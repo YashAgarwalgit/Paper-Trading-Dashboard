@@ -182,5 +182,3 @@ streamlit run enhanced_dashboard.py
 **⚠️ Institutional Disclaimer**: This platform is designed for professional quantitative finance practitioners and institutional use. It provides sophisticated tools for portfolio management, risk analysis, and strategy development. Users should have appropriate financial markets knowledge and conduct independent due diligence. The platform is for research, analysis, and paper trading purposes. Real trading involves substantial risk of loss.
 
 **🔒 Security & Compliance**: Built with institutional security standards, complete audit trails, and professional-grade data handling for hedge fund and asset management operations.
-
-[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/54763250/c2ca4ea2-432e-464d-8c28-0d6d491f389a/paste.txt
