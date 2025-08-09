@@ -279,7 +279,7 @@ def calculate_market_health(analytics_data):
     score_50ma = analytics_data.get('above_50ma_pct', 0)
     score_200ma = analytics_data.get('above_200ma_pct', 0)
     
-    new_highs = analytics_data.get('new_highs', 0)
+    new_highs = analytics_data.get('new_highs', 1)
     new_lows = analytics_data.get('new_lows', 1) # Avoid division by zero
     high_low_ratio = new_highs / (new_highs + new_lows)
     score_high_low = high_low_ratio * 100
@@ -2172,3 +2172,4 @@ elif page == "Market Dashboard":
                     name, result = items[i+1]
                     if result["df"] is not None: st.plotly_chart(create_index_chart(result["df"], f'{name} ({result["ticker"]})'), use_container_width=True)
                     else: st.subheader(name); st.error(f'Could not load data: {result["error"]}')
+
